@@ -48,6 +48,37 @@ async def updateRecommendation(recommendation):
             logger.error("Error with /recommendations/userID/movieID PUT: ", response.text)
         return response
 
+def updateRecommendation1(recommendation):
+
+    userID = recommendation["userID"]
+    movieID = recommendation["movieID"]
+
+    # url for getting recommendation
+    url = context.get_recommendation_service_url() + "/recommendations/" + str(userID) + "/" + str(movieID)
+    recommendationCheck = requests.get(url)
+
+    if recommendationCheck.status_code == 404:
+        # if this recommendation has not been made, insert it
+        postUrl = context.get_recommendation_service_url() + "/recommendations/" + str(userID)
+
+        # default values for recommendation
+        recommendation["count"] = 1
+        recommendation["skipCount"] = 0
+        recommendation["swipedYes"] = 0
+        response = requests.post(postUrl, json=recommendation)
+        if response.status_code != 201:
+            logger.error("Error with /recommendations POST: ", response.text)
+        return response
+    else:
+        # otherwise, increment the count of the recommendation and use put to update recommendation
+        recommendation = recommendationCheck.json()["data"][0]
+        recommendation["count"] += 1
+        putUrl = context.get_recommendation_service_url() + "/recommendations/" + str(userID) + "/" + str(movieID)
+        response = requests.put(putUrl, json=recommendation)
+        if response.status_code != 200:
+            logger.error("Error with /recommendations/userID/movieID PUT: ", response.text)
+        return response
+
 ##################################################################################################################
 
 @app.route('/')
@@ -57,7 +88,45 @@ def hello_world():
 ##### Remove GET later! ######
 @app.route('/movieHistorySeqPost', methods=["GET", "POST"])
 def userSeqPost():
-    return "This will do the sequential post"
+    try:
+        body = request.get_json()
+        movieID = body['movieID']
+        movieUrl = context.get_movie_service_url() + "/movies?movie_id=" + movieID
+        movieCheck = requests.get(movieUrl)
+        if movieCheck.status_code != 200:
+            return Response("The movie is not in the database.", status=404)
+        movie = movieCheck.json()
+
+        historyUrl = context.get_user_service_url() + "/movie-histories"
+        historyUrlGet = context.get_user_service_url() + "/movie-histories?movieID=" + movieID
+        movieHistory = {"userID": body['userID'],
+                        "movieID": movieID,
+                        "movieTitle": movie[0]["movie_title"],
+                        "likedMovie": body.get("likedMovie", 0)}
+        historyPost = None
+        if requests.get(historyUrlGet).status_code == 404:
+            historyPost = requests.post(historyUrl, json=movieHistory)
+            if historyPost.status_code != 201:
+                return Response(historyPost, content_type="application/json")
+
+        if movieHistory['likedMovie'] == 1:
+            recUrl = context.get_recommendation_service_url() + "/similarity?movieID=" + movieID
+            movieRecCheck = requests.get(recUrl)
+            if movieRecCheck.status_code != 200:
+                return Response("No recommendations generated.")
+            movieRecs = movieRecCheck.json()['recommendations']
+            for rec in movieRecs:
+                updateRecommendation1({"userID": body["userID"], "movieID": rec["movieID"]})
+
+        return Response(historyPost, content_type="application/json")
+
+    except Exception as e:
+        statusRespDict = {
+            "status": "500 Internal server error",
+            "error message": str(e)
+        }
+        rsp = Response(json.dumps(statusRespDict), status=500, content_type='application/json')
+        return rsp
 
 ##### Remove GET later! ######
 @app.route('/movieHistoryParallelPost', methods=["POST"])
